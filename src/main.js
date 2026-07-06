@@ -1,8 +1,36 @@
 import './style.css';
-import { Sidebar, SearchBar, Grid, PlayerModal } from './ui.js';
+import { Sidebar, SearchBar, Grid, PlayerModal, SettingsPanel } from './ui.js';
 import { fetchTrending, searchMulti, fetchDetails, fetchSeason } from './api.js';
 
 const app = document.querySelector('#app');
+
+const DEFAULT_SERVERS = [
+    { id: 'vidsrcpro', name: 'VidSrc Pro', moviePattern: 'https://vidsrc.pro/embed/movie/{id}', tvPattern: 'https://vidsrc.pro/embed/tv/{id}/{s}/{e}' },
+    { id: 'embedsu', name: 'Embed.su', moviePattern: 'https://embed.su/embed/movie/{id}', tvPattern: 'https://embed.su/embed/tv/{id}/{s}/{e}' },
+    { id: 'vidsrc2', name: 'VidSrc 2', moviePattern: 'https://vidsrc.to/embed/movie/{id}', tvPattern: 'https://vidsrc.to/embed/tv/{id}/{s}/{e}' },
+    { id: '2embed', name: '2Embed', moviePattern: 'https://www.2embed.cc/embed/{id}', tvPattern: 'https://www.2embed.cc/embedtv/{id}&s={s}&e={e}' },
+    { id: 'smashy', name: 'Smashy', moviePattern: 'https://player.smashy.stream/movie/{id}', tvPattern: 'https://player.smashy.stream/tv/{id}&s={s}&e={e}' }
+];
+
+const getServers = () => {
+    const customServersRaw = localStorage.getItem('openflix_custom_servers');
+    const customServers = customServersRaw ? JSON.parse(customServersRaw) : [];
+    return [...DEFAULT_SERVERS, ...customServers];
+};
+
+const saveCustomServer = (server) => {
+    const customServersRaw = localStorage.getItem('openflix_custom_servers');
+    const customServers = customServersRaw ? JSON.parse(customServersRaw) : [];
+    customServers.push(server);
+    localStorage.setItem('openflix_custom_servers', JSON.stringify(customServers));
+};
+
+const deleteCustomServer = (id) => {
+    const customServersRaw = localStorage.getItem('openflix_custom_servers');
+    let customServers = customServersRaw ? JSON.parse(customServersRaw) : [];
+    customServers = customServers.filter(s => s.id !== id);
+    localStorage.setItem('openflix_custom_servers', JSON.stringify(customServers));
+};
 
 // State
 let state = {
@@ -13,7 +41,8 @@ let state = {
     currentType: null,
     currentSeason: 1,
     currentEpisode: 1,
-    numberOfSeasons: 1
+    numberOfSeasons: 1,
+    activeServer: 'vidsrcpro'
 };
 
 // Render Logic
@@ -25,6 +54,9 @@ const render = async () => {
             <div id="content-area">
                 Loading...
             </div>
+            <footer class="app-footer">
+                <p>OpenFlix &copy; 2026. Immersive Deep Space Media System. Data powered by TMDB API.</p>
+            </footer>
         </main>
         ${PlayerModal()}
     `;
@@ -37,29 +69,15 @@ const render = async () => {
     const episodesContainer = document.getElementById('episodes-container');
 
     // Server Logic
-    const getUrl = (server, id, type, s = 1, e = 1) => {
-        if (server === 'embedsu') {
-            return type === 'movie'
-                ? `https://embed.su/embed/movie/${id}`
-                : `https://embed.su/embed/tv/${id}/${s}/${e}`;
-        } else if (server === 'vidsrcpro') {
-            return type === 'movie'
-                ? `https://vidsrc.pro/embed/movie/${id}`
-                : `https://vidsrc.pro/embed/tv/${id}/${s}/${e}`;
-        } else if (server === 'vidsrc2') {
-            return type === 'movie'
-                ? `https://vidsrc.to/embed/movie/${id}`
-                : `https://vidsrc.to/embed/tv/${id}/${s}/${e}`;
-        } else if (server === '2embed') {
-            return type === 'movie'
-                ? `https://www.2embed.cc/embed/${id}`
-                : `https://www.2embed.cc/embedtv/${id}&s=${s}&e=${e}`;
-        } else if (server === 'smashy') {
-            return type === 'movie'
-                ? `https://player.smashy.stream/movie/${id}`
-                : `https://player.smashy.stream/tv/${id}&s=${s}&e=${e}`;
-        }
-        return '';
+    const getUrl = (serverId, id, type, s = 1, e = 1) => {
+        const servers = getServers();
+        const server = servers.find(srv => srv.id === serverId) || servers[0];
+        if (!server) return '';
+        const pattern = type === 'movie' ? server.moviePattern : server.tvPattern;
+        return pattern
+            .replace(/{id}/g, id)
+            .replace(/{s}/g, s)
+            .replace(/{e}/g, e);
     };
 
     // Episode & Season Logic
@@ -154,9 +172,29 @@ const render = async () => {
         state.currentSeason = parseInt(season);
         state.currentEpisode = parseInt(episode);
 
-        // Reset active buttons and set Default to VidSrc Pro
-        document.querySelectorAll('.server-btn').forEach(btn => btn.classList.remove('active'));
-        document.querySelector('[data-server="vidsrcpro"]').classList.add('active');
+        // Dynamically populate server options
+        const container = document.getElementById('serverControlsContainer');
+        const servers = getServers();
+        if (!servers.some(s => s.id === state.activeServer)) {
+            state.activeServer = 'vidsrcpro';
+        }
+
+        let buttonsHtml = `<span>Server:</span>`;
+        servers.forEach(srv => {
+            const isActive = srv.id === state.activeServer;
+            buttonsHtml += `<button class="server-btn ${isActive ? 'active' : ''}" data-server="${srv.id}">${srv.name}</button>`;
+        });
+        container.innerHTML = buttonsHtml;
+
+        // Re-attach listeners to dynamically generated buttons
+        container.querySelectorAll('.server-btn').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                container.querySelectorAll('.server-btn').forEach(b => b.classList.remove('active'));
+                e.target.classList.add('active');
+                state.activeServer = e.target.dataset.server;
+                updatePlayerUrl();
+            });
+        });
 
         // Show/Hide Episodes Container
         if (type === 'tv') {
@@ -188,15 +226,6 @@ const render = async () => {
         // Clear URL params
         window.history.replaceState({}, '', window.location.pathname);
     };
-
-    // Server Switching
-    document.querySelectorAll('.server-btn').forEach(btn => {
-        btn.addEventListener('click', (e) => {
-            document.querySelectorAll('.server-btn').forEach(b => b.classList.remove('active'));
-            e.target.classList.add('active');
-            if (state.currentId) updatePlayerUrl();
-        });
-    });
 
     closeModal.addEventListener('click', closePlayer);
 
@@ -252,6 +281,7 @@ const render = async () => {
             else if (page === 'movies') loadByGenre('movie');
             else if (page === 'tv') loadByGenre('tv');
             else if (page === 'anime') loadAnime();
+            else if (page === 'settings') loadSettings();
         });
     });
 
@@ -283,6 +313,44 @@ const loadAnime = async () => {
         <p>Anime specific filter requires API update.</p>
         ${Grid(results)}
     `;
+};
+
+const loadSettings = () => {
+    const contentArea = document.getElementById('content-area');
+    contentArea.innerHTML = SettingsPanel(getServers());
+    state.page = 'settings';
+
+    // Form element logic for addition
+    const form = document.getElementById('addServerForm');
+    if (form) {
+        form.addEventListener('submit', (e) => {
+            e.preventDefault();
+            const name = document.getElementById('serverName').value.trim();
+            const id = document.getElementById('serverId').value.trim().toLowerCase();
+            const moviePattern = document.getElementById('serverMoviePattern').value.trim();
+            const tvPattern = document.getElementById('serverTvPattern').value.trim();
+
+            const current = getServers();
+            if (current.some(s => s.id === id)) {
+                alert('A server with this key already exists. Please choose a unique key.');
+                return;
+            }
+
+            saveCustomServer({ id, name, moviePattern, tvPattern });
+            loadSettings();
+        });
+    }
+
+    // Server deletion logic
+    contentArea.querySelectorAll('.delete-server-btn').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            const id = e.currentTarget.dataset.id;
+            if (confirm('Are you sure you want to delete this custom server?')) {
+                deleteCustomServer(id);
+                loadSettings();
+            }
+        });
+    });
 };
 
 const loadHome = async () => {
